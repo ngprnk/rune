@@ -90,7 +90,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         document.body.append(a11y);
     }
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '',
-        copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
+        selection: { start: 0, end: 0, direction: 'forward' }, copyText: '', composing: false, composition: '', shift: false, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
     const send = event => {
@@ -230,15 +230,29 @@ export function sync(h, key, text, base, anchor, focus, secure) {
     } else {
         if (h.textarea.value !== text) h.textarea.value = text;
         if (!secure) {
-            const start = Math.min(anchor, focus), end = Math.max(anchor, focus);
-            const direction = anchor > focus ? 'backward' : 'forward';
-            if (h.textarea.selectionStart !== start || h.textarea.selectionEnd !== end || h.textarea.selectionDirection !== direction) {
-                h.textarea.setSelectionRange(start, end, direction);
-            }
+            h.selection = { start: Math.min(anchor, focus), end: Math.max(anchor, focus),
+                direction: anchor > focus ? 'backward' : 'forward' };
+            reselect(h);
         }
-        if (editing && document.activeElement !== h.field) activate(h);
+        if (document.activeElement === h.canvas) {
+            // The canvas holds the keyboard only while no field does, and text services (IME,
+            // dictation, the accent menu) have nowhere to write then. A field that has it again
+            // takes it back. Its input mode stays, so a touch screen's keyboard waits for a tap.
+            h.field.focus({ preventScroll: true });
+            reselect(h);
+        } else if (editing && document.activeElement !== h.field) activate(h);
     }
     h.syncing = false;
+}
+
+// A textarea without focus keeps its selection loosely: a press on the canvas can collapse it to
+// the start. The field's selection is set again whenever it takes the keyboard.
+function reselect(h) {
+    const t = h.textarea, { start, end, direction } = h.selection;
+    if (h.field !== t || h.composing) return;
+    if (t.selectionStart !== start || t.selectionEnd !== end || t.selectionDirection !== direction) {
+        t.setSelectionRange(start, end, direction);
+    }
 }
 
 export function syncCopy(h, text) {
@@ -459,6 +473,8 @@ export function activate(h) {
     const field = h.key ? h.field : h.canvas;
     if (h.key) field.inputMode = 'text';
     if (document.activeElement !== field) field.focus({ preventScroll: true });
+    // Rune skips a sync whose field and selection haven't changed, so this one may be stale.
+    if (h.key) reselect(h);
 }
 
 export async function pastedImage(h, max) {
